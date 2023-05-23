@@ -232,6 +232,24 @@ static inline int can_readahead(struct can_recvfrom_s *pstate)
   if ((iob = iob_peek_queue(&conn->readahead)) != NULL &&
       pstate->pr_buflen > 0)
     {
+      /*
+       * block the following cases:
+       * 1. iob->io_flink != NULL: iob chain. one can frame is always within one iob.
+       *    This avoids DEBUGASSERT(g_iob_sem.semcount <= CONFIG_IOB_NBUFFERS); in iob_free
+       *    since somehow, the iob chain if this case happens is always the whole iob free list or at least
+       *    has the same length as the free list.
+       * 2. iob->io_pktlen == 0: can frame length is zero
+       * 3. iob->io_offset <= 0: iob offset is not valid
+       */
+      if (iob->io_flink != NULL || iob->io_pktlen == 0 || iob->io_offset <= 0)
+        {
+          if (iob->io_pktlen == 0 || iob->io_offset <= 0)
+            {
+              iob_free(iob);
+            }
+          iob_remove_queue(&conn->readahead);
+          return 0;
+        }
       DEBUGASSERT(iob->io_pktlen > 0);
 
 #ifdef CONFIG_NET_TIMESTAMP
@@ -277,7 +295,18 @@ static inline int can_readahead(struct can_recvfrom_s *pstate)
            * buffer queue).
            */
 
-          iob_trimhead_queue(&conn->readahead, recvlen);
+          /* dont trim since if the iob chain is correct, it should only have one
+           * iob in the chain. If the iob chain is longer, something is wrong.
+           * Best way (found to work) to handle long chain is to remove it from the queue
+           * but NOT freeing it cause this might be the whole free list like in the
+           * above case
+           * THIS SEEMS WRONG BUT IT SOMEHOW WORKS ¯\_(ツ)_/¯
+           */
+
+          FAR struct iob_s *tmp;
+          tmp = iob_remove_queue(&conn->readahead);
+          DEBUGASSERT(tmp == iob);
+          UNUSED(tmp);
         }
 
       /* do not pass frames with DLC > 8 to a legacy socket */

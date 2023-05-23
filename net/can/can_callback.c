@@ -133,6 +133,24 @@ uint16_t can_callback(FAR struct net_driver_s *dev,
 
       if ((flags & CAN_NEWDATA) != 0)
         {
+          /*
+           * block the following cases:
+           * 1. dev->d_iob->io_flink != NULL: iob chain. one can frame is always within one iob.
+           *    This avoids DEBUGASSERT(g_iob_sem.semcount <= CONFIG_IOB_NBUFFERS); in iob_free
+           *    since somehow, the iob chain if this case happens is always the whole iob free list or at least
+           *    has the same length as the free list.
+           * 2. dev->d_iob->io_pktlen == 0: can frame length is zero
+           * 3. dev->d_iob->io_offset <= 0: iob offset is not valid
+           */
+          if (dev->d_iob->io_flink != NULL || dev->d_iob->io_pktlen == 0 || dev->d_iob->io_offset <= 0)
+            {
+              if (dev->d_iob->io_flink == NULL)
+                {
+                  iob_free(dev->d_iob);
+                }
+              netdev_iob_clear(dev);
+              return flags;
+            }
 #ifdef CONFIG_NET_TIMESTAMP
           /* TIMESTAMP sockopt is activated,
            * create timestamp and copy to iob

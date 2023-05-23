@@ -102,10 +102,31 @@ void devif_send(FAR struct net_driver_s *dev, FAR const void *buf,
 
   /* Prepare device buffer before poll callback */
 
-  iob_update_pktlen(dev->d_iob, offset);
+  /* remove iob_update_pktlen since it's not need for socketCAN case when len (offset) is 0
+   * This also helps avoid trimming and freeing iob chain with length equal to the whole free list
+   * which would trigger DEBUGASSERT(g_iob_sem.semcount <= CONFIG_IOB_NBUFFERS); in iob_free
+   */
+
+  //iob_update_pktlen(dev->d_iob, offset);
+
+  /* make sure that iob is not NULL else that would trigger assertion in iob_trycopyin */
+
+  if (dev->d_iob == NULL)
+    {
+      netdev_iob_release(dev);
+      goto errout;
+    }
 
   ret = iob_trycopyin(dev->d_iob, buf, len, offset, false);
-  if (ret != len)
+
+  /* release iob chain is ret < 0 (faults) or dev->d_iob->io_pktlen != len
+   * This is more correct than using ret != len since in iob_trycopyin,
+   * if ret is not < 0, it will be total which is assigned with len at the
+   * beginning. This doesn't reflect the true copied length if there is any
+   * hickups during the copy. Hence using dev->d_iob->io_pktlen is more correct
+   */
+
+  if (ret < 0 || dev->d_iob->io_pktlen != len)
     {
       netdev_iob_release(dev);
       goto errout;
